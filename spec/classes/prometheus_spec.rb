@@ -116,7 +116,7 @@ describe 'prometheus' do
                 'content' => File.read(fixtures('files', "prometheus#{prom_major}.sysv"))
               )
             }
-          elsif ['centos-7-x86_64', 'debian-8-x86_64', 'debian-9-x86_64', 'redhat-7-x86_64', 'ubuntu-16.04-x86_64', 'ubuntu-18.04-x86_64', 'archlinux-4-x86_64'].include?(os)
+          elsif ['centos-7-x86_64', 'centos-8-x86_64', 'debian-8-x86_64', 'debian-9-x86_64', 'redhat-7-x86_64', 'redhat-8-x86_64', 'ubuntu-16.04-x86_64', 'ubuntu-18.04-x86_64', 'archlinux-5-x86_64'].include?(os)
             # init_style = 'systemd'
 
             it { is_expected.to contain_class('systemd') }
@@ -126,6 +126,24 @@ describe 'prometheus' do
                 'content' => File.read(fixtures('files', "prometheus#{prom_major}.systemd"))
               )
             }
+            describe 'max_open_files' do
+              context 'by default' do
+                it {
+                  content = catalogue.resource('systemd::unit_file', 'prometheus.service').send(:parameters)[:content]
+                  expect(content).not_to include('LimitNOFILE')
+                }
+              end
+              context 'when set to 1000000' do
+                let(:params) do
+                  parameters.merge('max_open_files' => 1_000_000)
+                end
+
+                it {
+                  content = catalogue.resource('systemd::unit_file', 'prometheus.service').send(:parameters)[:content]
+                  expect(content).to include('LimitNOFILE=1000000')
+                }
+              end
+            end
           elsif ['ubuntu-14.04-x86_64'].include?(os)
             # init_style = 'upstart'
 
@@ -156,7 +174,7 @@ describe 'prometheus' do
           it {
             is_expected.to contain_file('/etc/prometheus').with(
               'ensure'  => 'directory',
-              'owner'   => 'prometheus',
+              'owner'   => 'root',
               'group'   => 'prometheus',
               'purge'   => true,
               'recurse' => true
@@ -167,9 +185,9 @@ describe 'prometheus' do
             is_expected.to contain_file('prometheus.yaml').with(
               'ensure'  => 'present',
               'path'    => '/etc/prometheus/prometheus.yaml',
-              'owner'   => 'prometheus',
+              'owner'   => 'root',
               'group'   => 'prometheus',
-              'mode'    => '0660',
+              'mode'    => '0640',
               'content' => File.read(fixtures('files', "prometheus#{prom_major}.yaml"))
             ).that_notifies('Class[prometheus::service_reload]')
           }
@@ -247,7 +265,7 @@ describe 'prometheus' do
             it {
               is_expected.to contain_file('/etc/prometheus/alert.rules').with(
                 'ensure'  => 'file',
-                'owner'   => 'prometheus',
+                'owner'   => 'root',
                 'group'   => 'prometheus',
                 'content' => File.read(fixtures('files', "prometheus#{prom_major}.alert.rules"))
               ).that_notifies('Class[prometheus::service_reload]')
@@ -278,10 +296,33 @@ describe 'prometheus' do
               is_expected.to contain_file('prometheus.yaml').with(
                 'ensure'  => 'present',
                 'path'    => '/etc/prometheus/prometheus.yaml',
-                'owner'   => 'prometheus',
+                'owner'   => 'root',
                 'group'   => 'prometheus',
                 'content' => %r{http://domain.tld/path}
               )
+            }
+          end
+        end
+      end
+
+      context 'with manage_config => false' do
+        [
+          {
+            version: '1.5.3',
+            manage_config: false
+          },
+          {
+            version: '2.0.0-rc.1',
+            manage_config: false
+          }
+        ].each do |parameters|
+          context "with prometheus verions #{parameters[:version]}" do
+            let(:params) do
+              parameters
+            end
+
+            it {
+              is_expected.not_to contain_file('/etc/prometheus/prometheus.yaml')
             }
           end
         end

@@ -82,51 +82,63 @@
 
 class prometheus::statsd_exporter (
   String $download_extension,
-  Variant[Stdlib::HTTPSUrl, Stdlib::HTTPUrl] $download_url_base,
+  Prometheus::Uri $download_url_base,
   Array $extra_groups,
   String $group,
   Stdlib::Absolutepath $mapping_config_path,
   String $package_ensure,
   String $package_name,
-  Array[Hash] $statsd_maps,
+  Array[Hash] $mappings,
   String $user,
   String $version,
-  String $arch                                                       = $prometheus::real_arch,
-  Stdlib::Absolutepath $bin_dir                                      = $prometheus::bin_dir,
-  String $config_mode                                                = $prometheus::config_mode,
-  Boolean $purge_config_dir                                          = true,
-  Boolean $restart_on_change                                         = true,
-  Boolean $service_enable                                            = true,
-  String $service_ensure                                             = 'running',
-  String $os                                                         = $prometheus::os,
-  String $init_style                                                 = $prometheus::init_style,
-  String $install_method                                             = $prometheus::install_method,
-  Boolean $manage_group                                              = true,
-  Boolean $manage_service                                            = true,
-  Boolean $manage_user                                               = true,
-  String $extra_options                                              = '',
-  Optional[Variant[Stdlib::HTTPSUrl, Stdlib::HTTPUrl]] $download_url = undef,
+  String $arch                            = $prometheus::real_arch,
+  Stdlib::Absolutepath $bin_dir           = $prometheus::bin_dir,
+  String $config_mode                     = $prometheus::config_mode,
+  Boolean $purge_config_dir               = true,
+  Boolean $restart_on_change              = true,
+  Boolean $service_enable                 = true,
+  String $service_ensure                  = 'running',
+  String $os                              = $prometheus::os,
+  String $init_style                      = $prometheus::init_style,
+  String $install_method                  = $prometheus::install_method,
+  Boolean $manage_group                   = true,
+  Boolean $manage_service                 = true,
+  Boolean $manage_user                    = true,
+  String $extra_options                   = '',
+  Optional[Prometheus::Uri] $download_url = undef,
+  Boolean $export_scrape_job              = false,
+  Stdlib::Port $scrape_port               = 9102,
+  String[1] $scrape_job_name              = 'statsd',
 ) inherits prometheus {
 
-  $real_download_url    = pick($download_url,"${download_url_base}/download/${version}/${package_name}-${version}.${os}-${arch}.${download_extension}")
+  # Prometheus added a 'v' on the realease name at 0.4.0 and changed the configuration format to yaml in 0.5.0
+  if versioncmp ($version, '0.5.0') == -1 {
+    fail("I only support statsd_exporter version '0.5.0' or higher")
+  }
+
+  $real_download_url = pick($download_url,"${download_url_base}/download/v${version}/${package_name}-${version}.${os}-${arch}.${download_extension}")
+
   $notify_service = $restart_on_change ? {
     true    => Service['statsd_exporter'],
     default => undef,
   }
 
-  $extra_statsd_maps = hiera_array('prometheus::statsd_exporter::statsd_maps',[])
-  $real_statsd_maps = concat($extra_statsd_maps, $prometheus::statsd_exporter::statsd_maps)
-
   file { $mapping_config_path:
     ensure  => 'file',
     mode    => $config_mode,
-    owner   => $user,
+    owner   => 'root',
     group   => $group,
-    content => template('prometheus/statsd_mapping.conf.erb'),
+    content => to_yaml({ mappings => $mappings }),
     notify  => $notify_service,
   }
 
-  $options = "-statsd.mapping-config=\'${prometheus::statsd_exporter::mapping_config_path}\' ${prometheus::statsd_exporter::extra_options}"
+  # Switched to POSIX like flags in version 0.7.0
+  if versioncmp ($version, '0.7.0') >= 0 {
+    $option_prefix = '--'
+  } else {
+    $option_prefix = '-'
+  }
+  $options = "${option_prefix}statsd.mapping-config=\'${prometheus::statsd_exporter::mapping_config_path}\' ${prometheus::statsd_exporter::extra_options}"
 
   prometheus::daemon { 'statsd_exporter':
     install_method     => $install_method,
@@ -150,5 +162,8 @@ class prometheus::statsd_exporter (
     service_ensure     => $service_ensure,
     service_enable     => $service_enable,
     manage_service     => $manage_service,
+    export_scrape_job  => $export_scrape_job,
+    scrape_port        => $scrape_port,
+    scrape_job_name    => $scrape_job_name,
   }
 }

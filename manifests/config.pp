@@ -4,6 +4,8 @@ class prometheus::config {
 
   assert_private()
 
+  $max_open_files = $prometheus::max_open_files
+
   if $prometheus::server::init_style {
     if( versioncmp($prometheus::server::version, '2.0.0') < 0 ){
       # helper variable indicating prometheus version, so we can use on this information in the template
@@ -14,13 +16,19 @@ class prometheus::config {
       if $prometheus::server::remote_write_configs != [] {
         fail('remote_write_configs requires prometheus 2.X')
       }
-      $daemon_flags = [
+      $_daemon_flags = [
+        '-log.format logger:stdout',
         "-config.file=${prometheus::server::config_dir}/${prometheus::server::configname}",
         "-storage.local.path=${prometheus::server::localstorage}",
         "-storage.local.retention=${prometheus::server::storage_retention}",
         "-web.console.templates=${prometheus::shared_dir}/consoles",
         "-web.console.libraries=${prometheus::shared_dir}/console_libraries",
       ]
+      if $prometheus::server::extra_options {
+        $daemon_flags = $_daemon_flags + $prometheus::server::extra_options
+      } else {
+        $daemon_flags = $_daemon_flags
+      }
     } else {
       # helper variable indicating prometheus version, so we can use on this information in the template
       $prometheus_v2 = true
@@ -31,10 +39,16 @@ class prometheus::config {
         "--web.console.templates=${prometheus::server::shared_dir}/consoles",
         "--web.console.libraries=${prometheus::server::shared_dir}/console_libraries",
       ]
+
       if $prometheus::server::external_url {
-        $daemon_flags = $daemon_flags_basic + "--web.external-url=${prometheus::server::external_url}"
+        $_daemon_flags = $daemon_flags_basic + "--web.external-url=${prometheus::server::external_url}"
       } else {
-        $daemon_flags = $daemon_flags_basic
+        $_daemon_flags = $daemon_flags_basic
+      }
+      if $prometheus::server::extra_options {
+        $daemon_flags = $_daemon_flags + $prometheus::server::extra_options
+      } else {
+        $daemon_flags = $_daemon_flags
       }
     }
 
@@ -71,7 +85,7 @@ class prometheus::config {
           content => template('prometheus/prometheus.systemd.erb'),
         }
       }
-      'sysv' : {
+      'sysv', 'redhat' : {
         file { '/etc/init.d/prometheus':
           mode    => '0555',
           owner   => 'root',
@@ -109,21 +123,55 @@ class prometheus::config {
     }
   }
 
+  # TODO: promtool currently does not support checking the syntax of file_sd_config "includes".
+  # Ideally we'd check them the same way the other config files are checked.
+  file { "${prometheus::config_dir}/file_sd_config.d":
+    ensure  => directory,
+    group   => $prometheus::server::group,
+    purge   => true,
+    recurse => true,
+  }
+
+  $prometheus::server::collect_scrape_jobs.each |Hash $job_definition| {
+    if !has_key($job_definition, 'job_name') {
+      fail('collected scrape job has no job_name!')
+    }
+
+    $job_name = $job_definition['job_name']
+
+    Prometheus::Scrape_job <<| job_name == $job_name |>> {
+      collect_dir => "${prometheus::config_dir}/file_sd_config.d",
+      notify      => Class['::prometheus::service_reload'],
+    }
+  }
+  # assemble the scrape jobs in a single list that gets appended to
+  # $scrape_configs in the template
+  $collected_scrape_jobs = $prometheus::server::collect_scrape_jobs.map |$job_definition| {
+    $job_name = $job_definition['job_name']
+    merge($job_definition, {
+      file_sd_configs => [{
+        files => [ "${prometheus::config_dir}/file_sd_config.d/${job_name}_*.yaml" ]
+      }]
+    })
+  }
+
   if versioncmp($prometheus::server::version, '2.0.0') >= 0 {
     $cfg_verify_cmd = 'check config'
   } else {
     $cfg_verify_cmd = 'check-config'
   }
 
-  file { 'prometheus.yaml':
-    ensure       => present,
-    path         => "${prometheus::server::config_dir}/${prometheus::server::configname}",
-    owner        => $prometheus::server::user,
-    group        => $prometheus::server::group,
-    mode         => $prometheus::server::config_mode,
-    notify       => Class['prometheus::service_reload'],
-    content      => template($prometheus::server::config_template),
-    validate_cmd => "${prometheus::server::bin_dir}/promtool ${cfg_verify_cmd} %",
+  if $prometheus::server::manage_config {
+    file { 'prometheus.yaml':
+      ensure       => present,
+      path         => "${prometheus::server::config_dir}/${prometheus::server::configname}",
+      owner        => 'root',
+      group        => $prometheus::server::group,
+      mode         => $prometheus::server::config_mode,
+      notify       => Class['prometheus::service_reload'],
+      content      => template($prometheus::server::config_template),
+      validate_cmd => "${prometheus::server::bin_dir}/promtool ${cfg_verify_cmd} %",
+    }
   }
 
 }

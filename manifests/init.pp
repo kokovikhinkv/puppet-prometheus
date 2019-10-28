@@ -130,6 +130,26 @@
 #  via a reverse proxy). Used for generating relative and absolute links back to Alertmanager itself.
 #  If omitted, relevant URL components will be derived automatically.
 #
+#  [*extract_command*]
+#  Custom command passed to the archive resource to extract the downloaded archive.
+#
+#  [*collect_scrape_jobs*]
+#  Array of scrape_configs. Format, e.g.:
+#  - job_name: some_exporter
+#    scheme: https
+#  The jobs defined here will be used to collect resources exported via prometheus::daemon,
+#  creating the appropriate prometheus scrape configs for each endpoint. All scrape_config
+#  options can be passed as hash elements. Only the job_name is mandatory.
+#
+#  [*max_open_files*]
+#  The maximum number of file descriptors for the prometheus server.
+#  Defaults to `undef`, but set to a large integer to override your default OS limit.
+#  Currently only implemented for systemd based service.
+#
+#  [*usershell*]
+#  if requested, we create a user for prometheus or the exporters. The default
+#  shell is nologin. It can be overwritten to any valid path.
+#
 # Actions:
 #
 # Requires: see Modulefile
@@ -145,7 +165,7 @@ class prometheus (
   Stdlib::Absolutepath $shared_dir,
   String $version,
   String $install_method,
-  Variant[Stdlib::HTTPUrl, Stdlib::HTTPSUrl] $download_url_base,
+  Prometheus::Uri $download_url_base,
   String $download_extension,
   String $package_name,
   String $package_ensure,
@@ -168,24 +188,32 @@ class prometheus (
   String $service_ensure,
   Boolean $manage_service,
   Boolean $restart_on_change,
-  String $init_style,
-  String $extra_options,
+  String[1] $init_style,
+  Optional[String[1]] $extra_options,
   Optional[String] $download_url,
   String $arch,
   Boolean $manage_group,
   Boolean $purge_config_dir,
   Boolean $manage_user,
+  Optional[String[1]] $extract_command,
+  Boolean $manage_config,
+  Stdlib::Absolutepath $usershell,
   Hash $extra_alerts    = {},
   Hash $config_hash     = {},
   Hash $config_defaults = {},
   String $os            = downcase($facts['kernel']),
   Optional[Variant[Stdlib::HTTPUrl, Stdlib::Unixpath, String[1]]] $external_url = undef,
+  Optional[Array[Hash[String[1], Any]]] $collect_scrape_jobs = [],
+  Optional[Integer] $max_open_files = undef,
 ) {
 
   case $arch {
     'x86_64', 'amd64': { $real_arch = 'amd64' }
     'i386':            { $real_arch = '386'   }
+    'aarch64':         { $real_arch = 'arm64' }
     'armv7l':          { $real_arch = 'armv7' }
+    'armv6l':          { $real_arch = 'armv6' }
+    'armv5l':          { $real_arch = 'armv5' }
     default:           {
       fail("Unsupported kernel architecture: ${arch}")
     }
